@@ -1,15 +1,42 @@
+version: '3.8'
+
 services:
+  # 1. The Database Engine
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-    container_name: cve-elastic-engine
+    container_name: cve-elastic
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g" 
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
     ports:
       - "9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
+
+  # 2. The Flask Web Dashboard
+  web-ui:
+    build: .
+    container_name: cve-web-ui
+    ports:
+      - "5000:5000"
+    command: python app.py
+    depends_on:
+      - elasticsearch
+    volumes:
+      # Maps your local folder into the container
+      - .:/app 
+
+  # 3. The Hourly Auto-Updater Watchdog
+  watchdog:
+    build: .
+    container_name: cve-watchdog
+    command: python auto_sync.py
+    depends_on:
+      - elasticsearch
+    volumes:
+      # Ensures when Git pulls, the files save directly to your hard drive
+      - .:/app 
 
 volumes:
   es_data:

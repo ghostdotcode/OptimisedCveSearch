@@ -1,0 +1,9 @@
+# Ignore the Python Virtual Environment
+venv/
+__pycache__/
+
+# Ignore the massive data lake (we pull this dynamically)
+cves_data/
+
+# Ignore the auto-generated template
+master_template.json

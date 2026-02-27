@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CVE Data Lake</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Premium Pop-In Animation */
+        .pop-in {
+            animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+            opacity: 0;
+            transform: scale(0.95);
+        }
+
+        @keyframes popIn {
+            0% {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        /* Custom Scrollbar for JSON view */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-950 text-gray-100 font-sans min-h-screen p-8">
+
+    <div class="max-w-5xl mx-auto">
+        <header class="mb-8 text-center">
+            <h1
+                class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400 mb-4">
+                CVE Intelligence Dashboard
+            </h1>
+            <div class="flex justify-center gap-4 max-w-2xl mx-auto">
+                <input type="text" id="searchInput" placeholder="Enter CVE ID (e.g., CVE-2024-3094)..."
+                    class="w-full px-4 py-3 rounded-lg bg-gray-900 border border-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-900 outline-none transition-all text-lg shadow-inner">
+                <button onclick="searchCve()"
+                    class="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors shadow-lg shadow-blue-900/20">
+                    Search
+                </button>
+            </div>
+            <p id="errorMsg" class="text-red-400 mt-4 hidden font-medium"></p>
+        </header>
+
+        <div id="toggleContainer" class="hidden flex justify-end mb-4">
+            <button onclick="toggleView()" id="toggleBtn"
+                class="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-md text-sm font-medium transition-colors flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                </svg>
+                Switch to JSON View
+            </button>
+        </div>
+
+        <main id="resultsArea" class="hidden">
+
+            <div id="tableView" class="pop-in bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
+                <div class="p-6 border-b border-gray-800 bg-gray-900/50">
+                    <h2 class="text-2xl font-bold text-white" id="tv-cveId">CVE-XXXX-XXXX</h2>
+                    <span
+                        class="inline-block mt-2 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                        id="tv-state">PUBLISHED</span>
+                </div>
+
+                <div class="p-6">
+                    <div class="mb-6">
+                        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">Description</h3>
+                        <p class="text-gray-300 text-lg leading-relaxed" id="tv-description"></p>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-gray-800">
+                        <div>
+                            <p class="text-sm font-medium text-gray-500">Assigner Org ID</p>
+                            <p class="font-mono text-gray-300 mt-1" id="tv-assignerOrgId"></p>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-gray-500">Assigner Short Name</p>
+                            <p class="font-mono text-gray-300 mt-1" id="tv-assignerShortName"></p>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-gray-500">Date Published</p>
+                            <p class="font-mono text-gray-300 mt-1" id="tv-datePublished"></p>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-gray-500">Date Reserved</p>
+                            <p class="font-mono text-gray-300 mt-1" id="tv-dateReserved"></p>
+                        </div>
+                        <div>
+                            <p class="text-sm font-medium text-gray-500">Date Updated</p>
+                            <p class="font-mono text-gray-300 mt-1" id="tv-dateUpdated"></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="jsonView" class="hidden pop-in">
+                <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
+                    <div class="p-4 border-b border-gray-800 bg-gray-800/50 flex justify-between items-center">
+                        <span class="font-mono text-sm text-gray-400">raw_data.json</span>
+                    </div>
+                    <pre
+                        class="p-6 overflow-x-auto max-h-[70vh] text-sm font-mono text-emerald-400 leading-relaxed bg-[#0d1117]"><code id="jsonContent"></code></pre>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+        let currentView = 'table';
+
+        // Allow pressing Enter in the search bar
+        document.getElementById('searchInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') searchCve();
+        });
+
+        async function searchCve() {
+            const cveId = document.getElementById('searchInput').value;
+            const errorMsg = document.getElementById('errorMsg');
+            const resultsArea = document.getElementById('resultsArea');
+            const toggleContainer = document.getElementById('toggleContainer');
+            const tableView = document.getElementById('tableView');
+            const jsonView = document.getElementById('jsonView');
+
+            if (!cveId) return;
+
+            // Reset UI state
+            errorMsg.classList.add('hidden');
+            resultsArea.classList.add('hidden');
+            toggleContainer.classList.add('hidden');
+
+            // Re-trigger animation by removing and adding the class
+            tableView.classList.remove('pop-in');
+            jsonView.classList.remove('pop-in');
+
+            try {
+                const response = await fetch(`/api/search?cve_id=${encodeURIComponent(cveId)}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to fetch CVE data');
+                }
+
+                // Populate Table View
+                document.getElementById('tv-cveId').textContent = data.table_data.cveId;
+                document.getElementById('tv-state').textContent = data.table_data.state;
+                document.getElementById('tv-description').textContent = data.table_data.description;
+                document.getElementById('tv-assignerOrgId').textContent = data.table_data.assignerOrgId;
+                document.getElementById('tv-assignerShortName').textContent = data.table_data.assignerShortName;
+                document.getElementById('tv-datePublished').textContent = data.table_data.datePublished;
+                document.getElementById('tv-dateReserved').textContent = data.table_data.dateReserved;
+                document.getElementById('tv-dateUpdated').textContent = data.table_data.dateUpdated;
+
+                // Populate JSON View
+                document.getElementById('jsonContent').textContent = data.full_json;
+
+                // Show Results
+                resultsArea.classList.remove('hidden');
+                toggleContainer.classList.remove('hidden');
+
+                // Force reflow to restart CSS animation
+                void tableView.offsetWidth;
+                tableView.classList.add('pop-in');
+                jsonView.classList.add('pop-in');
+
+            } catch (err) {
+                errorMsg.textContent = err.message;
+                errorMsg.classList.remove('hidden');
+            }
+        }
+
+        function toggleView() {
+            const tableView = document.getElementById('tableView');
+            const jsonView = document.getElementById('jsonView');
+            const toggleBtn = document.getElementById('toggleBtn');
+
+            if (currentView === 'table') {
+                tableView.classList.add('hidden');
+                jsonView.classList.remove('hidden');
+                toggleBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg> Switch to Table View`;
+                currentView = 'json';
+            } else {
+                jsonView.classList.add('hidden');
+                tableView.classList.remove('hidden');
+                toggleBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg> Switch to JSON View`;
+                currentView = 'table';
+            }
+        }
+    </script>
+</body>
+
+</html>
