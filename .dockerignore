@@ -1,0 +1,12 @@
+# Ignore the Python Virtual Environment
+venv/
+__pycache__/
+
+# Ignore the massive data lake (we will map this via volumes instead)
+cves_data/
+
+# Ignore the auto-generated template
+master_template.json
+
+# Ignore Git history
+.git/

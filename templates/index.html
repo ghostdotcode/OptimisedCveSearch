@@ -66,6 +66,28 @@
             <p id="errorMsg" class="text-red-400 mt-4 hidden font-medium"></p>
         </header>
 
+        <div
+            class="flex flex-col sm:flex-row justify-between items-center bg-gray-900 border border-gray-800 rounded-lg p-4 mb-8 shadow-md">
+            <div class="flex items-center gap-3 mb-4 sm:mb-0">
+                <div class="relative flex h-3 w-3">
+                    <span
+                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </div>
+                <span class="text-sm font-medium text-gray-400 uppercase tracking-wider">Next Auto-Sync In:</span>
+                <span id="countdownClock" class="font-mono text-xl font-bold text-emerald-400">--:--</span>
+            </div>
+            <button onclick="forceSync()" id="forceSyncBtn"
+                class="px-5 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-md text-sm font-medium transition-colors flex items-center gap-2 shadow-sm">
+                <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                    </path>
+                </svg>
+                Force Sync Now
+            </button>
+        </div>
+
         <div id="toggleContainer" class="hidden flex justify-end mb-4">
             <button onclick="toggleView()" id="toggleBtn"
                 class="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-md text-sm font-medium transition-colors flex items-center gap-2">
@@ -132,6 +154,60 @@
     </div>
 
     <script>
+        // Telemetry Logic
+        let syncCountdown = 0;
+
+        async function fetchSyncStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                syncCountdown = data.seconds_remaining;
+                updateClockUI();
+            } catch (err) {
+                document.getElementById('countdownClock').textContent = "ERROR";
+            }
+        }
+
+        function updateClockUI() {
+            if (syncCountdown < 0) syncCountdown = 0;
+            const minutes = Math.floor(syncCountdown / 60).toString().padStart(2, '0');
+            const seconds = (syncCountdown % 60).toString().padStart(2, '0');
+            document.getElementById('countdownClock').textContent = `${minutes}:${seconds}`;
+        }
+
+        // Tick the clock down locally every second
+        setInterval(() => {
+            if (syncCountdown > 0) {
+                syncCountdown--;
+                updateClockUI();
+            } else if (syncCountdown === 0) {
+                // When it hits zero, ask the server for the new 60-minute timer
+                fetchSyncStatus();
+            }
+        }, 1000);
+
+        async function forceSync() {
+            const btn = document.getElementById('forceSyncBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = `<svg class="animate-spin w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Syncing...`;
+            btn.disabled = true;
+
+            try {
+                await fetch('/api/force_sync', { method: 'POST' });
+                // We don't reset the countdown timer here, because manual sync is decoupled!
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }, 3000); // Reset button UI after 3 seconds
+            } catch (err) {
+                console.error(err);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        // Fetch initial status when page loads
+        fetchSyncStatus();
         let currentView = 'table';
 
         // Allow pressing Enter in the search bar
