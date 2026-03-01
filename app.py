@@ -9,16 +9,12 @@ from elasticsearch import Elasticsearch
 from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
-# Docker network URL
 es = Elasticsearch("http://elasticsearch:9200")
 
-# Load the master template once
 MASTER_TEMPLATE = set()
 if os.path.exists("master_template.json"):
     with open("master_template.json", "r", encoding="utf-8") as f:
         MASTER_TEMPLATE = set(json.load(f))
-
-# --- CORE LOGIC: Git & Elasticsearch Sync ---
 
 
 def send_ntfy_alert(message):
@@ -31,22 +27,57 @@ def send_ntfy_alert(message):
         print(f"[!] Failed to send mobile alert: {e}")
 
 
+# --- THE PERSISTENT TRACKER LOGIC ---
 def get_git_changes():
     repo_path = "cves_data"
-    try:
-        print(
-            "[*] Background Thread Started: Pulling latest changes from GitHub...",
-            flush=True,
-        )
+    state_file = "sync_state.txt"
 
-        # Capture stderr so we can see exact Git errors
-        pull_process = subprocess.run(
+    try:
+        last_commit = None
+        if os.path.exists(state_file):
+            with open(state_file, "r") as f:
+                last_commit = f.read().strip()
+
+        if not last_commit:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            last_commit = result.stdout.strip()
+            with open(state_file, "w") as f:
+                f.write(last_commit)
+            print(
+                f"[*] Initialized persistent sync state at commit: {last_commit[:7]}",
+                flush=True,
+            )
+
+        print("[*] Pulling latest changes from GitHub...", flush=True)
+        subprocess.run(
             ["git", "pull"], cwd=repo_path, check=True, capture_output=True, text=True
         )
-        print(f"[*] Git Pull Output: {pull_process.stdout.strip()}", flush=True)
 
         result = subprocess.run(
-            ["git", "diff", "HEAD@{1}", "HEAD", "--name-status"],
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        current_commit = result.stdout.strip()
+
+        if last_commit == current_commit:
+            print("[*] No new commits on GitHub. Database is up to date.", flush=True)
+            return [], current_commit
+
+        print(
+            f"[*] Calculating differences between {last_commit[:7]} and {current_commit[:7]}...",
+            flush=True,
+        )
+        result = subprocess.run(
+            ["git", "diff", last_commit, current_commit, "--name-status"],
             cwd=repo_path,
             check=True,
             capture_output=True,
@@ -63,22 +94,19 @@ def get_git_changes():
                 if path.endswith(".json") and "cves/" in path:
                     changes.append((status, path))
 
-        print(f"[*] Git Diff found {len(changes)} modified JSON files.", flush=True)
-        return changes
+        return changes, current_commit
 
-    except subprocess.CalledProcessError as e:
-        print(f"[!] GIT COMMAND FAILED: {e.cmd}", flush=True)
-        print(f"[!] EXACT GIT ERROR: {e.stderr.strip()}", flush=True)
-        return []
     except Exception as e:
-        print(f"[!] UNEXPECTED ERROR: {str(e)}", flush=True)
-        return []
+        print(f"[!] GIT ERROR: {str(e)}", flush=True)
+        return [], None
 
 
 def sync_updates(is_manual=False):
     print("\n[*] --- SYNC JOB INITIATED ---", flush=True)
     repo_path = "cves_data"
-    changed_files = get_git_changes()
+    state_file = "sync_state.txt"
+
+    changed_files, new_commit = get_git_changes()
 
     if not changed_files:
         print("[*] Sync process finished: No new files to inject.", flush=True)
@@ -104,13 +132,20 @@ def sync_updates(is_manual=False):
                     print(f"    [+] Updated {cve_id}", flush=True)
                     success_count += 1
             except Exception as e:
-                print(f"    [!] Failed to read/index {cve_id}: {e}", flush=True)
+                print(f"    [!] Failed to index {cve_id}: {e}", flush=True)
         elif status == "D":
             try:
                 es.delete(index="cves", id=cve_id, ignore=[404])
                 print(f"    [-] Removed {cve_id}", flush=True)
-            except Exception as e:
-                print(f"    [!] Failed to delete {cve_id}: {e}", flush=True)
+            except Exception:
+                pass
+
+    if new_commit:
+        with open(state_file, "w") as f:
+            f.write(new_commit)
+        print(
+            f"[*] Updated persistent sync state to commit: {new_commit[:7]}", flush=True
+        )
 
     print("[*] Sync complete!", flush=True)
     if success_count > 0:
@@ -120,10 +155,7 @@ def sync_updates(is_manual=False):
         )
 
 
-# --- SCHEDULER SETUP ---
-
 scheduler = BackgroundScheduler(timezone=timezone.utc)
-# Run immediately on boot, then every 60 minutes
 scheduler.add_job(
     func=lambda: sync_updates(is_manual=False),
     trigger="interval",
@@ -132,8 +164,6 @@ scheduler.add_job(
     next_run_time=datetime.now(timezone.utc),
 )
 scheduler.start()
-
-# --- FLASK ROUTES ---
 
 
 def extract_all_keys(data, parent_key=""):
@@ -164,7 +194,6 @@ def search_cve():
     cve_id = request.args.get("cve_id", "").strip().upper()
     if not cve_id:
         return jsonify({"error": "No CVE ID provided"}), 400
-
     try:
         res = es.get(index="cves", id=cve_id)
         data = res["_source"]
@@ -207,12 +236,8 @@ def search_cve():
         return jsonify({"error": f"{cve_id} not found in local database."}), 404
 
 
-# --- NEW TELEMETRY ENDPOINTS ---
-
-
 @app.route("/api/status", methods=["GET"])
 def get_status():
-    """Returns exactly how many seconds until the next auto-sync."""
     job = scheduler.get_job("auto_sync_job")
     if job and job.next_run_time:
         time_remaining = (
@@ -224,12 +249,9 @@ def get_status():
 
 @app.route("/api/force_sync", methods=["POST"])
 def force_sync():
-    """Triggers an immediate sync without resetting the 60-minute timer."""
-    # Run in a background thread so the UI button doesn't freeze while Git is pulling
     threading.Thread(target=lambda: sync_updates(is_manual=True)).start()
     return jsonify({"message": "Manual sync initiated in background."})
 
 
 if __name__ == "__main__":
-    # Do not use reloader in production to avoid duplicating the scheduler
     app.run(host="0.0.0.0", port=5000, use_reloader=False)
