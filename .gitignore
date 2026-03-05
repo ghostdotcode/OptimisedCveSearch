@@ -7,3 +7,12 @@ cves_data/
 
 # Ignore the auto-generated template
 master_template.json
+
+.env
+
+# Web Server Sockets
+gunicorn.ctl
+
+# Docker and Database data volumes
+es_data/
+*.pyc

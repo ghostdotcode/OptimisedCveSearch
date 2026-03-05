@@ -1,3 +1,6 @@
 Flask==3.0.2
 elasticsearch==8.12.0
 APScheduler==3.10.4
+gunicorn
+redis
+celery

@@ -7,7 +7,6 @@
     <title>CVE Data Lake</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Premium Pop-In Animation */
         .pop-in {
             animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
             opacity: 0;
@@ -26,7 +25,6 @@
             }
         }
 
-        /* Custom Scrollbar for JSON view */
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
@@ -67,7 +65,7 @@
         </header>
 
         <div
-            class="flex flex-col sm:flex-row justify-between items-center bg-gray-900 border border-gray-800 rounded-lg p-4 mb-8 shadow-md">
+            class="flex flex-col sm:flex-row justify-between items-center bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4 shadow-md">
             <div class="flex items-center gap-3 mb-4 sm:mb-0">
                 <div class="relative flex h-3 w-3">
                     <span
@@ -88,6 +86,21 @@
             </button>
         </div>
 
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-8 shadow-md">
+            <div class="flex flex-col sm:flex-row justify-between items-center">
+                <div>
+                    <h3 class="text-lg font-bold text-white mb-1">Database Reconstruction</h3>
+                    <p class="text-sm text-gray-400">Trigger a full distributed backfill of all historical records via
+                        Celery worker.</p>
+                </div>
+                <button id="backfill-btn"
+                    class="mt-4 sm:mt-0 px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-md transition-colors shadow-lg shadow-amber-900/20">
+                    Run Full Backfill
+                </button>
+            </div>
+            <div id="backfill-status" class="mt-4 w-full"></div>
+        </div>
+
         <div id="toggleContainer" class="hidden flex justify-end mb-4">
             <button onclick="toggleView()" id="toggleBtn"
                 class="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-md text-sm font-medium transition-colors flex items-center gap-2">
@@ -100,13 +113,15 @@
         </div>
 
         <main id="resultsArea" class="hidden">
-
             <div id="tableView" class="pop-in bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
                 <div class="p-6 border-b border-gray-800 bg-gray-900/50">
                     <h2 class="text-2xl font-bold text-white" id="tv-cveId">CVE-XXXX-XXXX</h2>
-                    <span
-                        class="inline-block mt-2 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                        id="tv-state">PUBLISHED</span>
+                    <div class="mt-2 flex items-center gap-2 flex-wrap">
+                        <span
+                            class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                            id="tv-state">PUBLISHED</span>
+                        <div id="tv-cvss-badge" class="hidden"></div>
+                    </div>
                 </div>
 
                 <div class="p-6">
@@ -149,12 +164,69 @@
                         class="p-6 overflow-x-auto max-h-[70vh] text-sm font-mono text-emerald-400 leading-relaxed bg-[#0d1117]"><code id="jsonContent"></code></pre>
                 </div>
             </div>
-
         </main>
     </div>
 
     <script>
-        // Telemetry Logic
+        // --- REDIS-BACKED POLLING LOGIC ---
+        function pollBackfillStatus() {
+            fetch('/api/backfill/status')
+                .then(response => response.json())
+                .then(data => {
+                    const statusDiv = document.getElementById('backfill-status');
+
+                    if (data.running) {
+                        // let total = data.total_found || 1;
+                        let total = 333000;
+                        let processed = data.indexed + data.skipped + data.failed;
+                        let percent = Math.round((processed / total) * 100);
+
+                        statusDiv.innerHTML = `
+                            <div class="p-4 border rounded-md bg-blue-900/20 border-blue-800/50">
+                                <div class="flex justify-between mb-1">
+                                    <span class="text-sm font-medium text-blue-400">Sync in progress...</span>
+                                    <span class="text-sm font-medium text-blue-400">${percent}%</span>
+                                </div>
+                                <div class="w-full bg-gray-800 rounded-full h-2 mb-2">
+                                    <div class="bg-blue-500 h-2 rounded-full" style="width: ${percent}%"></div>
+                                </div>
+                                <div class="text-xs text-gray-400 font-mono">
+                                    Indexed: <span class="text-emerald-400">${data.indexed}</span> | 
+                                    Skipped: <span class="text-gray-500">${data.skipped}</span> | 
+                                    Failed: <span class="text-red-400">${data.failed}</span>
+                                </div>
+                            </div>
+                        `;
+                        setTimeout(pollBackfillStatus, 2000);
+                    } else if (data.done) {
+                        statusDiv.innerHTML = `
+                            <div class="p-4 border rounded-md bg-emerald-900/20 border-emerald-800/50">
+                                <span class="text-sm font-medium text-emerald-400">Sync Complete! Successfully processed ${data.total_found} files.</span>
+                            </div>
+                        `;
+                    } else {
+                        statusDiv.innerHTML = ``;
+                    }
+                })
+                .catch(err => console.error("Error polling status:", err));
+        }
+
+        document.getElementById('backfill-btn').addEventListener('click', function () {
+            document.getElementById('backfill-status').innerHTML = `
+                <div class="p-4 border rounded-md bg-amber-900/20 border-amber-800/50">
+                    <span class="text-sm font-medium text-amber-400 animate-pulse">Initializing distributed Celery task...</span>
+                </div>
+            `;
+            fetch('/api/backfill', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    setTimeout(pollBackfillStatus, 1000);
+                });
+        });
+
+        window.addEventListener('DOMContentLoaded', pollBackfillStatus);
+
+        // --- EXISTING LOGIC ---
         let syncCountdown = 0;
 
         async function fetchSyncStatus() {
@@ -175,13 +247,11 @@
             document.getElementById('countdownClock').textContent = `${minutes}:${seconds}`;
         }
 
-        // Tick the clock down locally every second
         setInterval(() => {
             if (syncCountdown > 0) {
                 syncCountdown--;
                 updateClockUI();
             } else if (syncCountdown === 0) {
-                // When it hits zero, ask the server for the new 60-minute timer
                 fetchSyncStatus();
             }
         }, 1000);
@@ -194,11 +264,10 @@
 
             try {
                 await fetch('/api/force_sync', { method: 'POST' });
-                // We don't reset the countdown timer here, because manual sync is decoupled!
                 setTimeout(() => {
                     btn.innerHTML = originalText;
                     btn.disabled = false;
-                }, 3000); // Reset button UI after 3 seconds
+                }, 3000);
             } catch (err) {
                 console.error(err);
                 btn.innerHTML = originalText;
@@ -206,11 +275,9 @@
             }
         }
 
-        // Fetch initial status when page loads
         fetchSyncStatus();
         let currentView = 'table';
 
-        // Allow pressing Enter in the search bar
         document.getElementById('searchInput').addEventListener('keypress', function (e) {
             if (e.key === 'Enter') searchCve();
         });
@@ -222,15 +289,14 @@
             const toggleContainer = document.getElementById('toggleContainer');
             const tableView = document.getElementById('tableView');
             const jsonView = document.getElementById('jsonView');
+            const cvssBadgeContainer = document.getElementById('tv-cvss-badge');
 
             if (!cveId) return;
 
-            // Reset UI state
             errorMsg.classList.add('hidden');
             resultsArea.classList.add('hidden');
             toggleContainer.classList.add('hidden');
 
-            // Re-trigger animation by removing and adding the class
             tableView.classList.remove('pop-in');
             jsonView.classList.remove('pop-in');
 
@@ -242,7 +308,6 @@
                     throw new Error(data.error || 'Failed to fetch CVE data');
                 }
 
-                // Populate Table View
                 document.getElementById('tv-cveId').textContent = data.table_data.cveId;
                 document.getElementById('tv-state').textContent = data.table_data.state;
                 document.getElementById('tv-description').textContent = data.table_data.description;
@@ -252,14 +317,50 @@
                 document.getElementById('tv-dateReserved').textContent = data.table_data.dateReserved;
                 document.getElementById('tv-dateUpdated').textContent = data.table_data.dateUpdated;
 
-                // Populate JSON View
+                const severity = data.table_data.cvssSeverity;
+                const score = data.table_data.cvssScore;
+                const version = data.table_data.cvssVersion;
+
+                if (score && score !== "N/A") {
+                    let badgeColor = "bg-gray-500/10 text-gray-400 border-gray-500/20";
+                    if (severity === "CRITICAL") badgeColor = "bg-red-500/10 text-red-400 border-red-500/20";
+                    else if (severity === "HIGH") badgeColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
+                    else if (severity === "MEDIUM") badgeColor = "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+                    else if (severity === "LOW") badgeColor = "bg-green-500/10 text-green-400 border-green-500/20";
+
+                    cvssBadgeContainer.innerHTML = `<span class="px-3 py-1 rounded-full text-xs font-bold border ${badgeColor}">CVSS: ${score} (${severity}) - ${version}</span>`;
+                } else {
+                    cvssBadgeContainer.innerHTML = `
+                        <span class="px-3 py-1 rounded-full text-xs font-bold border bg-gray-800 text-gray-400 border-gray-700 animate-pulse flex items-center gap-2">
+                            <svg class="animate-spin w-3 h-3 text-blue-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            Querying NVD...
+                        </span>`;
+
+                    fetch(`/api/nvd_cvss?cve_id=${encodeURIComponent(cveId)}`)
+                        .then(nvdResponse => nvdResponse.json())
+                        .then(nvdData => {
+                            if (nvdData.score && nvdData.score !== "N/A") {
+                                let badgeColor = "bg-gray-500/10 text-gray-400 border-gray-500/20";
+                                if (nvdData.severity === "CRITICAL") badgeColor = "bg-red-500/10 text-red-400 border-red-500/20";
+                                else if (nvdData.severity === "HIGH") badgeColor = "bg-orange-500/10 text-orange-400 border-orange-500/20";
+                                else if (nvdData.severity === "MEDIUM") badgeColor = "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+                                else if (nvdData.severity === "LOW") badgeColor = "bg-green-500/10 text-green-400 border-green-500/20";
+
+                                cvssBadgeContainer.innerHTML = `<span class="px-3 py-1 rounded-full text-xs font-bold border ${badgeColor}">NVD CVSS: ${nvdData.score} (${nvdData.severity}) - ${nvdData.version}</span>`;
+                            } else {
+                                cvssBadgeContainer.innerHTML = `<span class="px-3 py-1 rounded-full text-xs font-bold border bg-gray-500/10 text-gray-500 border-gray-500/20">No CVSS Score Published</span>`;
+                            }
+                        })
+                        .catch(() => {
+                            cvssBadgeContainer.innerHTML = `<span class="px-3 py-1 rounded-full text-xs font-bold border bg-red-900/20 text-red-500 border-red-900/50">NVD Timeout</span>`;
+                        });
+                }
+                cvssBadgeContainer.classList.remove('hidden');
                 document.getElementById('jsonContent').textContent = data.full_json;
 
-                // Show Results
                 resultsArea.classList.remove('hidden');
                 toggleContainer.classList.remove('hidden');
 
-                // Force reflow to restart CSS animation
                 void tableView.offsetWidth;
                 tableView.classList.add('pop-in');
                 jsonView.classList.add('pop-in');
